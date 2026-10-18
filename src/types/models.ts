@@ -1,4 +1,3 @@
-
 // Frontend-side TypeScript types mirroring backend/prisma/schema.prisma in
 // docforum-core. Keep in sync — see AGENTS.md doc-update table and hard
 // rule 2 in ARCHITECTURE_ESSENTIALS.md ("don't invent parallel
@@ -195,4 +194,145 @@ export interface OutgoingMessage {
   status: OutgoingMessageStatus;
   createdAt: string;
   error?: string;
+}
+
+// --- Data export (Phase W2, issue #26 — docforum-core#40) -------------------
+
+export type DataExportStatus = 'pending' | 'processing' | 'ready' | 'expired' | 'failed';
+
+export interface DataExport {
+  id: string;
+  patientProfileId: string;
+  status: DataExportStatus;
+  requestedAt: string;
+  readyAt?: string | null;
+  expiresAt?: string | null;
+  fileSizeBytes?: number | null;
+  downloadUrl?: string | null;
+  errorMessage?: string | null;
+}
+
+// --- Account deletion (Phase W2, issue #27 — docforum-core#41) ---------------
+
+export interface DeleteAccountResponse {
+  success: boolean;
+  message: string;
+  deletedAt: string;
+}
+
+// --- Care thread timeline (Phase W2, issue #28) ------------------------------
+
+export type CareStepType = 'appointment' | 'consultation' | 'referral' | 'order' | 'fulfillment' | 'payment';
+export type CareStepStatus = 'completed' | 'in_progress' | 'action_required' | 'pending' | 'skipped';
+
+export interface CareThreadStep {
+  id: string;
+  stepType: CareStepType;
+  title: string;
+  description: string;
+  status: CareStepStatus;
+  timestamp?: string | null;
+  actionLabel?: string | null;
+  actionUrl?: string | null;
+  metadata?: Record<string, unknown>;
+}
+
+export interface CareThread {
+  id: string;
+  patientProfileId: string;
+  title: string;
+  doctorName: string;
+  specialty: string;
+  startedAt: string;
+  updatedAt: string;
+  status: 'active' | 'completed' | 'cancelled';
+  steps: CareThreadStep[];
+}
+
+// --- Facility finder with location & distance (Phase W2, issue #29) ----------
+
+export interface FacilityLocation {
+  address: string;
+  city: string;
+  latitude: number;
+  longitude: number;
+}
+
+export interface FacilityWithDistance extends FacilityProfile {
+  location?: FacilityLocation;
+  distanceKm?: number | null;
+  isOpen?: boolean;
+  phone?: string;
+  rating?: number;
+}
+
+// --- Phase W3 — Doctor core flow (assumed, docforum-core issues #61/#129 not
+// landed yet) ---------------------------------------------------------------
+// These shapes mirror the smallest contract needed to build the doctor's
+// today view, live queue, inbox, and consultation sign-off. Reconcile once
+// docforum-core defines them; record any deviation in
+// ARCHITECTURE_ESSENTIALS.md "Known assumptions".
+
+export type AppointmentStatus =
+  | 'scheduled'
+  | 'checked_in'
+  | 'in_progress'
+  | 'completed'
+  | 'cancelled'
+  | 'no_show';
+
+export interface Appointment {
+  id: string;
+  doctorProfileId: string;
+  patientProfileId: string;
+  patientName: string;
+  startsAt: string;
+  endsAt: string;
+  status: AppointmentStatus;
+  reason?: string | null;
+  checkInAt?: string | null;
+  startedAt?: string | null;
+  completedAt?: string | null;
+}
+
+export interface QueueEntry {
+  appointmentId: string;
+  patientProfileId: string;
+  fullName: string;
+  checkedInAt: string;
+  queuePosition: number;
+  status: 'checked_in' | 'in_progress' | 'completed';
+}
+
+export interface RunningDelay {
+  computedDelayMin: number;
+  manualOverrideMin: number | null;
+  effectiveDelayMin: number;
+}
+
+export interface UpdateRunningDelayInput {
+  manualOverrideMin: number | null;
+}
+
+export type ThreadFilter = 'all' | 'unread' | 'closing_soon';
+
+export interface ConsultationNote {
+  id: string;
+  appointmentId: string;
+  content: string;
+  signedAt?: string | null;
+  signedBy?: string | null;
+  autoSignOffAt?: string | null;
+  addenda: ConsultationAddendum[];
+}
+
+export interface ConsultationAddendum {
+  id: string;
+  noteId: string;
+  content: string;
+  createdAt: string;
+}
+
+export interface AddAddendumInput {
+  content: string;
 }

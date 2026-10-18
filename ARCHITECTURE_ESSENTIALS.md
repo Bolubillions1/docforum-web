@@ -121,6 +121,59 @@ following endpoints as the contract until #61 lands:
 - Message bodies are rendered as text only, with safe linkification -- no
   `dangerouslySetInnerHTML` anywhere in the thread.
 
+### Data export (docforum-core#40, issue #26)
+- `POST /account/data-export` (body: `{password}`) → `DataExport`
+- `GET /account/data-export` → `DataExport | null`
+- `GET /account/data-export/:id/download` → file stream (`application/json`)
+- `DataExport` shape: `{id, patientProfileId, status: 'pending'|'processing'|'ready'|'expired'|'failed', requestedAt, readyAt?, expiresAt?, fileSizeBytes?, downloadUrl?, errorMessage?}`
+- Ready exports expire after 24 hours. Downloads require bearer authorization and avoid keeping export contents in memory.
+
+### Account deletion (docforum-core#41, issue #27)
+- `POST /account/delete` (body: `{password, confirmation: 'DELETE'}`) → `{success, message, deletedAt}`
+- Clinical and statutory retention: identity credentials (name, email, password hashes, guardian links) are permanently scrubbed/anonymized. Clinical consultation notes, diagnostic orders, and cryptographic payment/escrow records are retained by law in de-identified form.
+- Deletion is blocked if there are active orders or unreleased funded escrows.
+- Client clears all QueryClient cache and Zustand session/profile state.
+
+### Care thread timeline (issue #28)
+- `GET /patients/:patientProfileId/care-threads` → `CareThread[]`
+- `GET /care-threads/:id` → `CareThread`
+- Aggregates appointments, consultations, referrals, orders, fulfillment, and escrow payment settlement into a single continuous journey timeline.
+- Progressive rendering and graceful degradation when modules are not yet implemented.
+
+### Facility finder with distance sorting (docforum-core#74, issue #29)
+- `GET /facilities?type=&lat=&lng=&query=` → `FacilityWithDistance[]`
+- OpenStreetMap tiles with attribution.
+- Patient location is requested with transparent consent, kept strictly in transient memory, and NEVER persisted to storage or URLs.
+
+### Phase W3 — Doctor core flow (assumed, not yet in docforum-core)
+
+These shapes back issues #45–#49. docforum-core issues #61 (message thread),
+#129 (in-person check-in / live queue position) and the today's-appointments
+consultation contracts are not landed yet, so the endpoints below are the
+smallest reasonable assumption and must be reconciled once the real API
+exists.
+
+#### Today's appointments & live queue (issue #49, depends on #6)
+- `GET /doctor/appointments/today` → `Appointment[]` — today's appointments for the signed-in doctor, ordered by `startsAt`.
+- `GET /doctor/queue/today` → `QueueEntry[]` — checked-in patients in queue order (computed server-side from `checkInAt`).
+- `POST /appointments/:id/start` → `Appointment` — marks a checked-in visit `in_progress` (sets `startedAt`). Idempotent if already started.
+- `POST /appointments/:id/complete` → `Appointment` — marks an in-progress visit `completed` (sets `completedAt`).
+- `GET /doctor/queue/running-delay` → `RunningDelay` — computed delay from the current in-progress visit vs its scheduled end, plus any manual override.
+- `PATCH /doctor/queue/running-delay` (body: `{manualOverrideMin?: number | null}`) → `RunningDelay` — set/clear a manual "running late by X min" override.
+
+Undo behaviour: start/complete are applied optimistically and can be reverted within a short undo window (a few seconds) by re-calling the inverse action or clearing the optimistic timestamp; the UI surfaces an undo toast.
+
+#### Doctor messages inbox (issue #47)
+- `GET /doctor/messages/threads?filter=&cursor=&limit=` → `{threads: MessageThread[], nextCursor?: string | null}` — threads with unread counts, last-message preview (PHI — kept short), waiting time, oldest unanswered first by default.
+- `POST /message-threads/:id/read` → `{}` — mark a thread read (clears its unread count).
+- Header badge reads total unread = sum of `unreadCount` across threads.
+
+#### Consultation notes sign-off & addenda (issue #45, depends on #7)
+- `GET /consultation-notes/:appointmentId` → `ConsultationNote`
+- `POST /consultation-notes/:id/sign-off` → `ConsultationNote` — sets `signedAt`/`signedBy`; note becomes immutable after this.
+- `POST /consultation-notes/:id/addenda` (body: `{content}`) → `ConsultationAddendum` — append-only; no edit/delete UI for addenda.
+- Auto sign-off deadline, if present, is exposed as `autoSignOffAt` on the note.
+
 ## Roadmap / status
 See `ROADmaP.md` in this repo, and Phase 7 in `docforum-core's
 ROADMAP.md` for the original (pre-split) frontend phase this was carved
