@@ -4,13 +4,15 @@ import {
   useMutation,
   useQuery,
   useQueryClient,
-} from '@react-query/react';
-import { messagingService } from '../../../services/messaging-service';
+} from '@tanstack/react-query';
+import * as messagingService from '../../../services/messaging-service';
+import { useAuthStore } from '../../../store/auth-store';
 import type {
   Message,
   MessagePage,
   MessageThread,
   MessageSenderRole,
+  SendMessageInput,
 } from '../../../types/models';
 
 export type MessageStatus = 'sent' | 'sending' | 'failed';
@@ -53,8 +55,45 @@ function toOptimistic(message: Message): OptimisticMessage {
   return { ...message, clientId: message.id, status: 'sent' };
 }
 
+export function messagesKey(threadId: string) {
+  return ['messages', threadId] as const;
+}
+
+export function useThread(threadId: string) {
+  const accessToken = useAuthStore((state) => state.accessToken);
+
+  return useQuery({
+    queryKey: ['thread', threadId],
+    queryFn: ({ signal }) => messagingService.getThread(threadId, accessToken!, signal),
+    enabled: Boolean(threadId && accessToken),
+  });
+}
+
+export function useMessages(threadId: string | undefined) {
+  const accessToken = useAuthStore((state) => state.accessToken);
+
+  return useQuery({
+    queryKey: messagesKey(threadId ?? ''),
+    queryFn: ({ signal }) => messagingService.listMessages(threadId!, null, accessToken!, signal),
+    enabled: Boolean(threadId && accessToken),
+  });
+}
+
+export function useSendMessage(threadId: string) {
+  const accessToken = useAuthStore((state) => state.accessToken);
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (input: SendMessageInput) => messagingService.sendMessage(threadId, input, accessToken!),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: messagesKey(threadId) });
+    },
+  });
+}
+
 export function useMessageThread(appointmentId: string): UseMessageThreadResult {
   const queryClient = useQueryClient();
+  const accessToken = useAuthStore((state) => state.accessToken);
   const [appended, setAppended] = useState<OptimisticMessage[]>([]);
   const [draft, setDraft] = useState('');
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -62,26 +101,29 @@ export function useMessageThread(appointmentId: string): UseMessageThreadResult 
 
   const threadQuery = useQuery({
     queryKey: ['messaging', 'thread', appointmentId],
-    queryFn: () => messagingService.getThread(appointmentId),
-    enabled: Boolean(appointmentId),
+    queryFn: ({ signal }) =>
+      messagingService.getThread(appointmentId, accessToken!, signal),
+    enabled: Boolean(appointmentId && accessToken),
   });
 
   const historyQuery = useInfiniteQuery<MessagePage>({
     queryKey: ['messaging', 'messages', appointmentId],
-    enabled: Boolean(appointmentId),
+    enabled: Boolean(appointmentId && accessToken),
     initialPageParam: { limit: PAGE_SIZE },
-    queryFn: ({ pageParam }) =>
-      messagingService.listMessages(appointmentId, {
-        cursor: pageParam.cursor,
-        limit: pageParam.limit,
-      }),
+    queryFn: ({ pageParam, signal }) =>
+      messagingService.listMessages(
+        appointmentId,
+        pageParam.cursor ?? null,
+        accessToken!,
+        signal,
+      ),
     getNextPageParam: (lastPage) =>
       lastPage.nextCursor ? { cursor: lastPage.nextCursor } : undefined,
   });
 
   const sendMutation = useMutation({
     mutationFn: async ({ body }: { body: string; clientId: string }) =>
-      messagingService.sendMessage(appointmentId, { body }),
+      messagingService.sendMessage(appointmentId, { body }, accessToken!),
   });
 
   const historyMessages = useMemo(() => {

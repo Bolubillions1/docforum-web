@@ -18,11 +18,26 @@ documented assumption, not confirmed**, since `docforum-core` has no
 implemented routes yet. See `ARCHITECTURE_ESSENTIALS.md` "Known
 assumptions."
 - [x] Signup/login screens, corrected to **patient/doctor only** for
-self-serve signup — facility accounts are admin-invited (PRD OQ-2), so
-there is deliberately no facility option in the signup UI. Login works
-for all three roles (facility users just don't self-register). 14 tests
-passing (`npm test`), including one that asserts facility is never
-offered at signup.
+  self-serve signup — facility accounts are admin-invited (PRD OQ-2), so
+  there is deliberately no facility option in the signup UI. Login works
+  for all three roles (facility users just don't self-register). 14 tests
+  passing (`npm test`), including one that asserts facility is never
+  offered at signup.
+- [x] Idle timeout & automatic sign-out for shared devices. Tracked as
+  [issue #82](https://github.com/DocForum/docforum-web/issues/82)
+  (High, 200 pts) — `src/hooks/idle-timeout.ts` (pure timestamp logic) +
+  `src/hooks/useIdleTimeout.ts`, `SessionTimeoutWarning` /
+  `SessionTimeoutController` mounted in `Layout`. Timestamp-based
+  activity tracking (input, focus, visibility — never
+  interval-counting, so throttled background tabs stay correct), a
+  warning modal with "Stay signed in", cross-tab `BroadcastChannel`
+  coordination, and role-based defaults (patient 30 min, doctor/facility
+  15 min, admin 10 min) with a backend value taking precedence when
+  served. On timeout: API logout, ALL client state cleared, then
+  `/login?reason=idle-timeout` with an explanation. Unsaved form data is
+  flagged in the modal via `useUnsavedChangesWarning`. **Built against
+  assumed shape:** `GET /auth/session-timeout` (not in docforum-core) —
+  see `ARCHITECTURE_ESSENTIALS.md` "Known assumptions".
 - [ ] Restore session on reload via `POST /auth/refresh` (single-flight refresh, one retry on `401`, `RequireAuth` waits for boot refresh). Tracked as [issue #9](https://github.com/DocForum/docforum-web/issues/9) (Medium, 150 pts).
 - [ ] Not done: any integration test against a real `docforum-core`
 instance. Tracked as [issue #12](https://github.com/DocForum/docforum-web/issues/12) (High, 200 pts) — an end-to-end smoke test against a throwaway `docforum-core` backend.
@@ -33,17 +48,19 @@ instance. Tracked as [issue #12](https://github.com/DocForum/docforum-web/issues
 this repo's static frontend only.
 
 ## Phase W2 — Patient core flow
-**Fully scoped into issues #1–#5, #18–#21, #26–#29, plus the follow-on patient issues #32–#34 and #37.**
+**Fully scoped into issues #1–#5, #18–#23, #26–#29, plus the follow-on patient issues #32–#34 and #37.**
 - [ ] Doctor search (specialty + availability filter). Tracked as [issue #1](https://github.com/DocForum/docforum-web/issues/1) (Medium, 150 pts) — built against a documented assumed API shape, since `docforum-core` has no doctor-list endpoint yet.
 - [ ] Booking + intake form. Tracked as [issue #2](https://github.com/DocForum/docforum-web/issues/2) (High, 200 pts) — must handle the `409` slot-taken response from `docforum-core`'s real booking-concurrency guarantee explicitly, not as a generic error.
 - [ ] My appointments list. Tracked as [issue #3](https://github.com/DocForum/docforum-web/issues/3) (Trivial, 100 pts) — calls `docforum-core`'s real, already-implemented `GET /appointments/mine`, no assumption involved.
 - [ ] Referral accept/decline screen. Tracked as [issue #4](https://github.com/DocForum/docforum-web/issues/4) (Medium, 150 pts) — assumed contract against `docforum-core` issues #5–8, not yet merged there.
 - [x] Consultation message thread UI (shared by patients and doctors). Tracked as [issue #22](https://github.com/DocForum/docforum-web/issues/22) (High, 200 pts) — `MessageThread` feature with cursor-paginated history, optimistic send with failed/retry state, live updates via notification stream with polling fallback, and closed-thread state. Built against a documented assumed API shape (see `ARCHITECTURE_ESSENTIALS.md`) pending `docforum-core` issue #61. Fixed duplicate `identifier` declarations (`MessageThreadStatus`, `MessageSenderRole`) in `src/types/models.ts` flagged by the local syntax check before push.
 - [x] Orders list + facility-selection screen. Tracked as [issue #5](https://github.com/DocForum/docforum-web/issues/5) (Medium, 150 pts) — `src/features/orders/`, `OrdersPage` at `/patient/orders`. Lists every current prescription/lab order with superseded-version history derived from the supersedes chain (never "first record wins"), and lets the patient choose a fulfilling facility from only the capability-matched options docforum-core returns. Built against an assumed contract; see `ARCHITECTURE_ESSENTIALS.md` "Known assumptions — Phase W2".
+- [x] Order detail with verifiable QR code and print-friendly view. Tracked as [issue #25](https://github.com/DocForum/docforum-web/issues/25) (High, 200 pts) — **implemented**: `src/features/orders/`, `src/pages/OrderDetailPage.tsx`, routed at `/patient/orders/:orderId`. Built against an assumed `GET /orders/:id` + `GET /orders/mine` contract (docforum-core issue #71). See `ARCHITECTURE_ESSENTIALS.md` "Known assumptions".
 - [x] Health profile editor: allergies, conditions and current medications. Tracked as [issue #18](https://github.com/DocForum/docforum-web/issues/18) (High, 200 pts) — assumed contract against `docforum-core` issue #59.
 - [x] Dependents management for guardians. Tracked as [issue #19](https://github.com/DocForum/docforum-web/issues/19) (High, 200 pts) — assumed contract against `docforum-core` issue #42.
 - [x] Acting-for profile switcher: book and view records on behalf of a dependent. Tracked as [issue #20](https://github.com/DocForum/docforum-web/issues/20) (High, 200 pts) — client-only UI state (Zustand), threads `patientProfileId` through API calls and query keys.
 - [x] Guardian consent and age-of-majority handover screens. Tracked as [issue #21](https://github.com/DocForum/docforum-web/issues/21) (High, 200 pts) — assumed contract against `docforum-core` issue #42.
+- [x] Message attachments: upload with progress, preview and secure download. Tracked as [issue #23](https://github.com/DocForum/docforum-web/issues/23) (High, 200 pts) — assumed contract against `docforum-core` issues #61/#62. Includes a minimal shared thread shell (`MessageThread`) so the attachment composer/preview have a real home; the full thread UX (optimistic send, live updates, pagination states) remains [issue #22](https://github.com/DocForum/docforum-web/issues/22).
 - [x] Download my data: request, track and fetch a data export. Tracked as [issue #26](https://github.com/DocForum/docforum-web/issues/26) (High, 200 pts) — assumed contract against `docforum-core` issue #40.
 - [x] Account deletion flow with clear retention explanation. Tracked as [issue #27](https://github.com/DocForum/docforum-web/issues/27) (High, 200 pts) — assumed contract against `docforum-core` issue #41.
 - [x] Care thread timeline: one view from booking to results. Tracked as [issue #28](https://github.com/DocForum/docforum-web/issues/28) (High, 200 pts).
@@ -121,9 +138,19 @@ Admin-only screens beyond payments. Everything goes through `docforum-core`'s ad
 - [x] React Query key factory and cache invalidation conventions. Tracked as [issue #122](https://github.com/DocForum/docforum-web/issues/122) (High, 200 pts) — `src/query-keys.ts` (typed factory per resource, profile-scoped keys where the API scopes by profile, one invalidation root each) and `src/invalidations.ts` (the mutation → keys map, refreshed through `invalidateFor`); every query and mutation hook migrated off hand-written key arrays. Payment actions now refresh the affected intent and the facility ledgers, a confirmed visit action refreshes the dashboard appointment list and queue (the stand-in for booking until #2/#3 land and consume `appointmentKeys.list(profileId)`), and health writes stay scoped to the acting profile's one section. New tests: `query-keys.test.ts`, `invalidations.test.ts`, plus a hook-level invalidation case in `useQueue.test.tsx`. Conventions documented in `ARCHITECTURE_ESSENTIALS.md` "Query keys & cache invalidation".
 - [x] API client: request cancellation, de-duplication, timeouts and retry policy. Tracked as [issue #123](https://github.com/DocForum/docforum-web/issues/123) (High, 200 pts) — `src/services/api-client.ts` now owns the whole HTTP lifecycle: every request has a timeout (`DEFAULT_TIMEOUT_MS` 60 s, deliberately longer than a cold start so the `useSlowRequestHint` explanation isn't turned into a fake failure; slow endpoints — data-export create/download, admin job run — pass `SLOW_REQUEST_TIMEOUT_MS` 120 s) failing with a typed `ApiTimeoutError` that is distinct from `ApiError` and from an abort; identical concurrent GETs share one network request and one parsed result (keyed by URL, bearer token and timeout), with **independent cancellation per caller** — one caller walking away never fails the others, and the shared request is aborted only when its last caller does; mutations are never de-duplicated. Every service function used by a query takes an optional `AbortSignal` and every `queryFn` passes React Query's signal through, so navigating away actually stops the request; catch-all fallbacks rethrow aborts/timeouts instead of caching placeholder data (`useCareThreads`, `useFacilityLedger`). The shared `QueryClient`'s retry policy retries transient failures once and never retries a cancellation (`isAbortError`).
 - [x] Shared form system: react-hook-form with schema validation. Tracked as [issue #102](https://github.com/DocForum/docforum-web/issues/102) (High, 200 pts) — `react-hook-form` + `zod` schema validation layer (`src/components/form/FormField.tsx`, `src/hooks/useZodForm.ts`, `src/utils/form.ts`) with consistent, accessible errors (`aria-describedby`/`aria-invalid`), focus-to-first-error on submit, and server-side validation-error mapping onto fields. Migrated login, signup, wallet link and create payment intent forms. Documented in `ARCHITECTURE_ESSENTIALS.md` "Known assumptions — Shared form system".
+- [x] DataTable component with cursor pagination, sorting and URL-synced filters. Tracked as [issue #116](https://github.com/DocForum/docforum-web/issues/116) (High, 200 pts) — `src/components/DataTable.tsx` + `useTableUrlState`. Generic `<DataTable<T>>` with typed column definitions, text/select filter inputs, server-side sort via `aria-sort`, cursor pagination (Newer/Older — no page-number jump). Filters, sort and cursor sync to the URL. Responsive card layout under 600px via CSS. CSF 3 stories. 15 component + 7 hook tests.
+- [x] Print and PDF framework for orders, receipts and records. Tracked as [issue #117](https://github.com/DocForum/docforum-web/issues/117) (High, 200 pts) — `src/components/PrintLayout.tsx` (inline logo, title, generated date, no nav chrome). `usePrint` hook (window.print + lazy `jspdf`/`html2canvas` PDF export, never in main bundle). Applied to `PaymentReceiptDocument`, `OrderDetailDocument`, `DataExportSummaryDocument`. `@media print` page-break rules.
+- [x] Privacy-preserving product analytics (no PHI, no third-party tracking). Tracked as [issue #118](https://github.com/DocForum/docforum-web/issues/118) (High, 200 pts) — `src/utils/analytics.ts`: cookieless, self-hostable, disabled unless `VITE_ANALYTICS_ENDPOINT` is set. Explicit `ALLOWED_EVENTS` allowlist with no PHI. `scrubUrl` strips query strings and ids. DNT/GPC respected. `useAnalyticsPageview` hook. `/privacy` page. Env vars in `.env.example`.
+- [x] ADR + migration: configurable router (BrowserRouter / HashRouter). Tracked as [issue #119](https://github.com/DocForum/docforum-web/issues/119) (High, 200 pts) — `docs/adr/0001-routing-strategy.md` compares hosting options. `main.tsx` selects `BrowserRouter` by default, `HashRouter` when `VITE_USE_HASH_ROUTER=true`. `deploy-pages.yml` sets that flag for GitHub Pages. `HashRedirectShim` converts old `#/path` links to clean paths transparently.
 - [x] **PR conflict notifier** — `.github/workflows/pr-conflict-notifier.yml` + `.github/scripts/pr-conflict-notifier.cjs`. On every push to `main` (and every 3h) it labels open PRs that conflict with `main` as `needs-rebase` and @mentions the author once per push with rebase steps; the label clears itself when the conflict is resolved. Runs from `main` only and never checks out PR code.
 
 ## Changelog
+
+> New entries go in `changelog.d/`, one file per PR — see
+> `changelog.d/README.md`. Maintainers fold them in here with
+> `node scripts/fold-changelog.mjs`. Please don't append to this section
+> directly.
+
 - 2026-09-09 — Roadmap created, carved out of docforum-core Phase 7 as part
   of the 3-repo org split.
 - 2026-09-14 — Phase W1 implemented: Vite/React Router/React Query/Zustand
@@ -352,6 +379,18 @@ Admin-only screens beyond payments. Everything goes through `docforum-core`'s ad
 - 2026-10-07 — Opened issues #10 (explorer links in the payments
   console), #11 (ESLint in CI) and #12 (end-to-end smoke test against a
   real `docforum-core`, the unchecked Phase W1 item).
+- 2026-10-15 — Implemented Phase W2 issue #25 (order detail with verifiable
+  QR code and print-friendly view): added `OrderType`/`OrderStatus`/`Order`/
+  `OrderItem` types to `src/types/models.ts` (assumed — see
+  `ARCHITECTURE_ESSENTIALS.md` "Known assumptions"), `orders-service.ts`,
+  `src/features/orders/` (hook + `OrderDetail` + `OrderQrCode` components +
+  CSS modules with `@media print` rules), and `src/pages/OrderDetailPage.tsx`
+  routed at `/patient/orders/:orderId`. QR code encoded client-side via
+  `qrcode@1.5.4` from the token string only (no order details in QR).
+  Superseded/expired/cancelled orders show an explanation instead of a QR;
+  active orders show a large scannable QR with a full-screen mode and a
+  print/PDF button. Global `.no-print` utility class added to `global.css`.
+  14 new component tests added; all 41 tests pass, typecheck and build green.
 - 2026-10-16 — Built Phase W2 patient features: dependents management
   (#19), acting-for profile switcher (#20), health profile editor (#18),
   and guardian consent/age-of-majority handover screens (#21). All four
@@ -521,3 +560,4 @@ Admin-only screens beyond payments. Everything goes through `docforum-core`'s ad
 - 2026-10-20 — Built #8 facility fulfillment queue + lab-result upload: `src/features/facility-queue/`, `fulfillment-service.ts`, `apiFetchForm` multipart transport, in-progress/fulfilled/rejected transitions with terminal protection, file validation and upload UI, mock action/upload handlers, and queue tests. Removed the dashboard's hardcoded `DEFAULT_MOCK_QUEUE` fallback. Documented the pending `FulfillmentRecord` ADR and object-storage caveats in `ARCHITECTURE_ESSENTIALS.md`.
 - 2026-10-20 — Built Phase W5 payment status panel on patient orders (#61, custodial mode): patient order detail page `/patient/orders/:orderId` (`OrderDetailPage`, linked from #5's orders list) plus `OrderPaymentPanel` on `src/features/payments/` — the intent's status shown to the patient in plain language with a timeline for every state (not funded → held in escrow → released or refunded; failed says contact support), the escrow's protection made visible on the order itself rather than only in the admin console. Panel hides entirely when an order has no payment intent (404 → `null` in `payments-service.getPaymentIntentForOrder`); any other payment-lookup failure degrades to a quiet note. Reuses issue #5's `PatientOrder` shape and the shared patient-payment helpers (`status.ts` copy, `stroops.ts` BigInt-safe amounts, `explorer.ts` links) so wording matches the payment history screens. MSW mocks gained the two assumed endpoints (`GET /orders/:orderId`, `GET /payments/intents?orderId=`); demo orders were extended so all five intent statuses and a no-intent (panel hidden) case are exercisable in `npm run dev:mock`. **Built against assumed contracts** pending docforum-core#85 — documented in `ARCHITECTURE_ESSENTIALS.md` "Known assumptions — Patient order detail & payment panel".
 - 2026-10-20 — Hardened the PR automation against transient GitHub API errors. Today a single 500/503 response aborted a whole conflict-notifier run, so no PR after it got labelled. Both `pr-conflict-notifier.yml` and `pr-malware-scan.yml` now set `retries: 3` on `actions/github-script`, so 5xx responses are retried. The notifier also isolates each PR: a PR whose API calls still fail is skipped with a warning, listed as "API error, retried next run" in the run summary, and the remaining PRs are processed normally.
+- 2026-10-20 — Rebased message attachments (#23) onto the latest main: kept the doctor inbox's per-thread summary as `DoctorMessageThread` (freeing `MessageThread` for the consultation thread entity), added the shared thread route for doctors at `/doctor/messages/:threadId` alongside the existing patient route, and resolved the `ROADMAP.md`/`ARCHITECTURE_ESSENTIALS.md` conflicts. Upload progress/cancel/retry, inline image previews, PDF chips and per-click signed downloads remain as originally implemented; signed URLs are never cached. `npm run typecheck`, `npm test` and `npm run build` all pass on the rebased tree.
