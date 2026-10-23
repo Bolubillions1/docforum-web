@@ -12,7 +12,10 @@ import { ProfileSwitcher } from '../features/dependents/components/ProfileSwitch
 import { Button } from './Button';
 import { Logo } from './Logo';
 import { UnreadBadge } from '../features/messaging/components/UnreadBadge';
+import { RecordSearch } from '../features/search-records/components/RecordSearch';
 import { PageHeader } from './PageHeader';
+import { Flag } from './Flag';
+import { useRealtimeCacheSync } from '../hooks/useRealtimeCacheSync';
 import styles from './Layout.module.css';
 
 /** Roles a user may have. Mirrored from docforum-core's model. */
@@ -92,6 +95,8 @@ function roleNavItems(userRole: Role | null): NavItem[] {
   } else if (userRole === 'admin') {
     base.push(
       { to: '/admin', label: 'Payments', roles: ['admin'] },
+      { to: '/admin/verifications', label: 'Verifications', roles: ['admin'] },
+      { to: '/admin/verification', label: 'Specialty claims', roles: ['admin'] },
       { to: '/admin/referrals', label: 'Referrals', roles: ['admin'] },
       { to: '/admin/disputes', label: 'Disputes', roles: ['admin'] },
       { to: '/admin/audit', label: 'Audit trail', roles: ['admin'] },
@@ -106,6 +111,7 @@ function roleNavItems(userRole: Role | null): NavItem[] {
 export function Layout() {
   const user = useAuthStore((state) => state.user);
   const logoutMutation = useLogout();
+  useRealtimeCacheSync();
   const location = useLocation();
   const navigate = useNavigate();
 
@@ -200,6 +206,18 @@ export function Layout() {
             </RRNavLink>
           ))}
           {user && (
+            <Flag name="notification_preferences">
+              <RRNavLink
+                to="/settings/notifications"
+                className={({ isActive }) =>
+                  styles.navLink + (isActive ? ` ${styles.navLinkActive}` : '')
+                }
+              >
+                Notifications
+              </RRNavLink>
+            </Flag>
+          )}
+          {user && (
             <>
               {user.role === 'doctor' && <UnreadBadge />}
               <span className={styles.userChip}>
@@ -210,6 +228,7 @@ export function Layout() {
         </nav>
 
         <div className={styles.headerActions}>
+          <RecordSearch />
           <ProfileSwitcher />
           <Button variant="secondary" onClick={logout} loading={logoutMutation.isPending} size="small">
             {logoutMutation.isPending ? 'Logging out…' : 'Log out'}
@@ -255,6 +274,18 @@ export function Layout() {
                   {item.label}
                 </RRNavLink>
               ))}
+              <Flag name="notification_preferences">
+                <RRNavLink
+                  to="/settings/notifications"
+                  className={({ isActive }) =>
+                    styles.drawerLink +
+                    (isActive ? ` ${styles.drawerLinkActive}` : '')
+                  }
+                  onClick={closeDrawer}
+                >
+                  Notifications
+                </RRNavLink>
+              </Flag>
             </nav>
             <div className={styles.drawerUser}>
               <span className={styles.drawerEmail}>{user.email}</span>

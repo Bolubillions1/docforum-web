@@ -24,10 +24,15 @@ import * as facilityTeamService from '../services/facility-team-service';
 import * as fulfillmentService from '../services/fulfillment-service';
 import * as healthService from '../services/health-profile-service';
 import * as insightsService from '../services/insights-service';
+import * as integrationsService from '../services/integrations-service';
 import * as messagingService from '../services/messaging-service';
+import * as myFlagsService from '../services/my-flags-service';
+import * as notificationsService from '../services/notification-preferences-service';
 import * as ordersService from '../services/orders-service';
 import * as paymentsService from '../services/payments-service';
 import * as queueService from '../services/queue-service';
+import * as verificationService from '../services/admin-verification-service';
+import * as auditService from '../services/audit-service';
 import * as sessionTimeoutService from '../services/session-timeout-service';
 import { FACILITY_ID, PATIENT_PROFILE_ID } from './fixtures';
 
@@ -37,7 +42,7 @@ beforeAll(() => server.listen({ onUnhandledRequest: 'error' }));
 afterAll(() => server.close());
 beforeEach(() => {
   resetDb();
-  useMockStore.setState({ scenario: 'normal', latencyMs: 0, activeRole: 'patient' });
+  useMockStore.setState({ scenario: 'normal', latencyMs: 0, activeRole: 'patient', flagOverrides: {} });
 });
 
 describe('auth', () => {
@@ -508,6 +513,94 @@ describe('facility fulfillment queue', () => {
   });
 });
 
+describe('integrations (API keys & webhooks)', () => {
+  it('creates an API key with a one-time secret not returned by list', async () => {
+    const keys = await integrationsService.listApiKeys(FACILITY_ID, MOCK_ACCESS_TOKEN);
+    expect(keys).toHaveLength(2);
+
+    const created = await integrationsService.createApiKey(
+      FACILITY_ID,
+      { name: 'Test key (fake)', scopes: ['orders.read'] },
+      MOCK_ACCESS_TOKEN,
+    );
+    expect(created.secret).toMatch(/^df_live_/);
+    expect(created.name).toBe('Test key (fake)');
+
+    const after = await integrationsService.listApiKeys(FACILITY_ID, MOCK_ACCESS_TOKEN);
+    expect(after).toHaveLength(3);
+    expect(after.some((k) => 'secret' in k)).toBe(false);
+  });
+
+  it('revokes an API key and keeps it in the list as revoked', async () => {
+    const revoked = await integrationsService.revokeApiKey(
+      FACILITY_ID,
+      'key-demo-1',
+      MOCK_ACCESS_TOKEN,
+    );
+    expect(revoked.success).toBe(true);
+
+    const keys = await integrationsService.listApiKeys(FACILITY_ID, MOCK_ACCESS_TOKEN);
+    expect(keys.find((k) => k.id === 'key-demo-1')?.revokedAt).not.toBeNull();
+  });
+
+  it('creates a webhook endpoint with a one-time signing secret', async () => {
+    const created = await integrationsService.createWebhookEndpoint(
+      FACILITY_ID,
+      {
+        url: 'https://new.example.test/webhook',
+        events: ['order.created', 'order.fulfilled'],
+      },
+      MOCK_ACCESS_TOKEN,
+    );
+    expect(created.signingSecret).toMatch(/^whsec_/);
+
+    const endpoints = await integrationsService.listWebhookEndpoints(
+      FACILITY_ID,
+      MOCK_ACCESS_TOKEN,
+    );
+    expect(endpoints.some((e) => 'signingSecret' in e)).toBe(false);
+    expect(endpoints.find((e) => e.id === created.id)?.url).toBe(
+      'https://new.example.test/webhook',
+    );
+  });
+
+  it('sends a test delivery and redelivers a failed one', async () => {
+    const delivery = await integrationsService.sendTestDelivery(
+      FACILITY_ID,
+      'whk-demo-1',
+      MOCK_ACCESS_TOKEN,
+    );
+    expect(delivery.status).toBe('success');
+
+    const deliveries = await integrationsService.listWebhookDeliveries(
+      FACILITY_ID,
+      'whk-demo-1',
+      MOCK_ACCESS_TOKEN,
+    );
+    expect(deliveries.some((d) => d.status === 'failed')).toBe(true);
+
+    const redelivered = await integrationsService.redeliverWebhook(
+      FACILITY_ID,
+      'whk-demo-1',
+      'whd-demo-2',
+      MOCK_ACCESS_TOKEN,
+    );
+    expect(redelivered.status).toBe('success');
+  });
+
+  it('deletes an endpoint and its deliveries', async () => {
+    const result = await integrationsService.deleteWebhookEndpoint(
+      FACILITY_ID,
+      'whk-demo-1',
+      MOCK_ACCESS_TOKEN,
+    );
+    expect(result.success).toBe(true);
+    await expect(
+      integrationsService.listWebhookDeliveries(FACILITY_ID, 'whk-demo-1', MOCK_ACCESS_TOKEN),
+    ).resolves.toEqual([]);
+  });
+});
+
 describe('payments', () => {
   it('links a wallet and drives an intent through fund → release', async () => {
     const wallet = await paymentsService.getOwnWalletLink(MOCK_ACCESS_TOKEN);
@@ -701,6 +794,67 @@ describe('admin disputes', () => {
   });
 });
 
+describe('feature flags', () => {
+  it('returns the mock defaults for the signed-in user', async () => {
+    const evaluated = await myFlagsService.getMyFlags(MOCK_ACCESS_TOKEN);
+    expect(evaluated.flags.notification_preferences).toBe(true);
+    expect(evaluated.flags.realtime_updates).toBe(false);
+  });
+
+  it('lets the dev panel override a flag without touching the others', async () => {
+    useMockStore.setState({ flagOverrides: { realtime_updates: true } });
+    const evaluated = await myFlagsService.getMyFlags(MOCK_ACCESS_TOKEN);
+    expect(evaluated.flags.realtime_updates).toBe(true);
+    expect(evaluated.flags.notification_preferences).toBe(true);
+  });
+});
+
+describe('notification preferences', () => {
+  it('returns role-appropriate defaults with locked safety-critical rows', async () => {
+    const preferences = await notificationsService.getNotificationPreferences(MOCK_ACCESS_TOKEN);
+    const critical = preferences.preferences.filter((pref) => pref.type === 'critical_lab_result');
+    expect(critical).toHaveLength(3);
+    expect(critical.every((pref) => pref.locked && pref.enabled)).toBe(true);
+
+    useMockStore.setState({ activeRole: 'facility' });
+    const facility = await notificationsService.getNotificationPreferences(MOCK_ACCESS_TOKEN);
+    const facilityOrders = facility.preferences.find(
+      (pref) => pref.type === 'order_updates' && pref.channel === 'email',
+    );
+    expect(facilityOrders?.enabled).toBe(true);
+  });
+
+  it('saves a toggle and quiet hours, and refuses to disable a locked row', async () => {
+    const updated = await notificationsService.updateNotificationPreferences(
+      { preferences: [{ type: 'appointment_reminders', channel: 'email', enabled: false }] },
+      MOCK_ACCESS_TOKEN,
+    );
+    expect(
+      updated.preferences.find(
+        (pref) => pref.type === 'appointment_reminders' && pref.channel === 'email',
+      )?.enabled,
+    ).toBe(false);
+
+    const quiet = await notificationsService.updateNotificationPreferences(
+      { quietHours: { enabled: true, start: '22:00', end: '07:00', timeZone: 'Europe/London' } },
+      MOCK_ACCESS_TOKEN,
+    );
+    expect(quiet.quietHours).toEqual({
+      enabled: true,
+      start: '22:00',
+      end: '07:00',
+      timeZone: 'Europe/London',
+    });
+
+    await expect(
+      notificationsService.updateNotificationPreferences(
+        { preferences: [{ type: 'critical_lab_result', channel: 'email', enabled: false }] },
+        MOCK_ACCESS_TOKEN,
+      ),
+    ).rejects.toMatchObject({ status: 422 });
+  });
+});
+
 describe('dev panel scenarios', () => {
   it('forces 500s in the "error" scenario', async () => {
     useMockStore.setState({ scenario: 'error' });
@@ -731,5 +885,191 @@ describe('dev panel scenarios', () => {
     const started = Date.now();
     await dependentsService.listDependents(MOCK_ACCESS_TOKEN);
     expect(Date.now() - started).toBeGreaterThanOrEqual(180);
+  });
+});
+
+describe('pay with wallet (issue #59)', () => {
+  it("lists an order's intent, prepares it, and submits the signature to escrow", async () => {
+    const intent = await paymentsService.getPaymentIntentForOrder('ord-demo-lab-101', MOCK_ACCESS_TOKEN);
+    expect(intent).not.toBeNull();
+    expect(intent!.status).toBe('created');
+
+    const prepared = await paymentsService.preparePaymentIntent(intent!.id, MOCK_ACCESS_TOKEN);
+    expect(prepared.intentId).toBe(intent!.id);
+    expect(prepared.xdr).toContain('AAAA');
+    expect(prepared.status).toBe('awaiting_signature');
+    expect(Date.parse(prepared.expiresAt)).toBeGreaterThan(Date.now());
+
+    const submitted = await paymentsService.submitPaymentIntent(intent!.id, 'SIGNED_XDR', MOCK_ACCESS_TOKEN);
+    expect(submitted.status).toBe('escrowed');
+    expect(submitted.stellarTxHash).toBeTruthy();
+
+    // What the confirm poll reads back after submission.
+    const polled = await paymentsService.getPaymentIntent(intent!.id, MOCK_ACCESS_TOKEN);
+    expect(polled.status).toBe('escrowed');
+  });
+
+  it('returns no intent for an order with no payment — the panel stays hidden', async () => {
+    await expect(
+      paymentsService.getPaymentIntentForOrder('ord-unpriced', MOCK_ACCESS_TOKEN),
+    ).resolves.toBeNull();
+  });
+
+  it('rejects a submit without a signed XDR', async () => {
+    const intent = await paymentsService.getPaymentIntentForOrder('ord-demo-lab-101', MOCK_ACCESS_TOKEN);
+    await expect(
+      paymentsService.submitPaymentIntent(intent!.id, '', MOCK_ACCESS_TOKEN),
+    ).rejects.toMatchObject({ status: 409 });
+  });
+});
+
+describe('specialty claims (admin verification)', () => {
+  it('lists pending claims oldest first and filters by specialty and age', async () => {
+    const page = await verificationService.listSpecialtyClaims({}, MOCK_ACCESS_TOKEN);
+    expect(page.items.map((c) => c.id)).toEqual(['dsc-demo-3', 'dsc-demo-1', 'dsc-demo-2']);
+    expect(page.nextCursor).toBeNull();
+
+    const cardio = await verificationService.listSpecialtyClaims(
+      { specialtyId: 'spec-cardiology' },
+      MOCK_ACCESS_TOKEN,
+    );
+    expect(cardio.items.map((c) => c.specialtyId)).toEqual(['spec-cardiology']);
+
+    // The 168h fixture (dsc-demo-3, seeded 10 days old) survives; newer claims drop.
+    const old = await verificationService.listSpecialtyClaims({ olderThan: '168h' }, MOCK_ACCESS_TOKEN);
+    expect(old.items.map((c) => c.id)).toEqual(['dsc-demo-3']);
+    const week = await verificationService.listSpecialtyClaims({ olderThan: '72h' }, MOCK_ACCESS_TOKEN);
+    expect(week.items.map((c) => c.id)).toEqual(['dsc-demo-3', 'dsc-demo-1']);
+  });
+
+  it('approves a claim and leaves the pending queue', async () => {
+    const page = await verificationService.listSpecialtyClaims({}, MOCK_ACCESS_TOKEN);
+    const claim = page.items.find((c) => c.id === 'dsc-demo-1')!;
+    const approved = await verificationService.reviewSpecialtyClaim(
+      'dsc-demo-1',
+      { decision: 'approve', reason: null, expectedUpdatedAt: claim.updatedAt },
+      MOCK_ACCESS_TOKEN,
+    );
+    expect(approved.status).toBe('verified');
+    expect(approved.reviewedById).toBeTruthy();
+
+    const after = await verificationService.listSpecialtyClaims({}, MOCK_ACCESS_TOKEN);
+    expect(after.items.find((c) => c.id === 'dsc-demo-1')).toBeUndefined();
+  });
+
+  it('rejects with an actionable reason, and refuses a bare rejection', async () => {
+    const page = await verificationService.listSpecialtyClaims({}, MOCK_ACCESS_TOKEN);
+    const neuro = page.items.find((c) => c.id === 'dsc-demo-2')!;
+    const derm = page.items.find((c) => c.id === 'dsc-demo-3')!;
+    const rejected = await verificationService.reviewSpecialtyClaim(
+      'dsc-demo-2',
+      {
+        decision: 'reject',
+        reason: 'Upload a neurology board certification to resubmit.',
+        expectedUpdatedAt: neuro.updatedAt,
+      },
+      MOCK_ACCESS_TOKEN,
+    );
+    expect(rejected.status).toBe('rejected');
+    expect(rejected.rejectionReason).toContain('board certification');
+
+    await expect(
+      verificationService.reviewSpecialtyClaim(
+        'dsc-demo-3',
+        { decision: 'reject', reason: 'no', expectedUpdatedAt: derm.updatedAt },
+        MOCK_ACCESS_TOKEN,
+      ),
+    ).rejects.toMatchObject({ status: 422 });
+  });
+
+  it('409s when the admin reviewed a stale version of the claim', async () => {
+    await expect(
+      verificationService.reviewSpecialtyClaim(
+        'dsc-demo-1',
+        { decision: 'approve', reason: null, expectedUpdatedAt: '2026-01-01T00:00:00.000Z' },
+        MOCK_ACCESS_TOKEN,
+      ),
+    ).rejects.toMatchObject({ status: 409 });
+  });
+
+  it('serves the claim credential as bytes and 404s unknown claims', async () => {
+    const blob = await verificationService.fetchClaimCredential('dsc-demo-1', MOCK_ACCESS_TOKEN);
+    expect(blob.size).toBeGreaterThan(0);
+    expect(blob.type).toContain('pdf');
+
+    await expect(verificationService.fetchClaimCredential('nope', MOCK_ACCESS_TOKEN)).rejects.toMatchObject({
+      status: 404,
+    });
+    // dsc-demo-2 deliberately has no document attached.
+    await expect(verificationService.fetchClaimCredential('dsc-demo-2', MOCK_ACCESS_TOKEN)).rejects.toMatchObject({
+      status: 404,
+    });
+  });
+
+  it('serves the specialty catalog for the filter dropdown', async () => {
+    const specialties = await verificationService.listSpecialties(MOCK_ACCESS_TOKEN);
+    expect(specialties.map((s) => s.id)).toContain('spec-cardiology');
+  });
+});
+
+describe('verification queue (issue #64)', () => {
+  it('lists pending doctors oldest first with document counts', async () => {
+    const list = await verificationService.listVerifications({}, MOCK_ACCESS_TOKEN);
+    expect(list.items.map((item) => item.doctorProfileId)).toEqual([
+      'vrf-demo-1',
+      'vrf-demo-2',
+      'vrf-demo-3',
+    ]);
+    expect(list.items[0].documentCount).toBe(2);
+    expect(list.items[2].documentCount).toBe(0);
+    expect(list.nextCursor).toBeNull();
+  });
+
+  it('serves the detail, mints short-lived document URLs, and records decisions once', async () => {
+    const detail = await verificationService.getVerification('vrf-demo-1', MOCK_ACCESS_TOKEN);
+    expect(detail.profile.fullName).toContain('Dr Ada Example');
+    expect(detail.documents).toHaveLength(2);
+
+    const link = await verificationService.requestDocumentUrl('vrf-demo-1', 'doc-demo-1', MOCK_ACCESS_TOKEN);
+    expect(link.url).toContain('files.example.test');
+    expect(Date.parse(link.expiresAt)).toBeGreaterThan(Date.now());
+
+    const decision = {
+      status: 'rejected' as const,
+      reason: 'Credentials could not be verified.',
+      expectedUpdatedAt: detail.profile.updatedAt,
+    };
+    const decided = await verificationService.decideVerification('vrf-demo-1', decision, MOCK_ACCESS_TOKEN);
+    expect(decided.verificationStatus).toBe('rejected');
+
+    // The decided doctor leaves the pending queue.
+    const list = await verificationService.listVerifications({}, MOCK_ACCESS_TOKEN);
+    expect(list.items.map((item) => item.doctorProfileId)).not.toContain('vrf-demo-1');
+
+    // The decision lands in the audit-backed history…
+    const history = await auditService.listAuditEvents(
+      { entityType: 'DoctorProfile', entityId: 'vrf-demo-1', limit: 50 },
+      MOCK_ACCESS_TOKEN,
+    );
+    expect(history.items).toHaveLength(1);
+    expect(history.items[0].action).toBe('doctor.verification_status_changed');
+    expect(history.items[0].toState).toBe('rejected');
+
+    // …and repeating the same decision is a no-op: no duplicate event.
+    await verificationService.decideVerification('vrf-demo-1', decision, MOCK_ACCESS_TOKEN);
+    const after = await auditService.listAuditEvents(
+      { entityType: 'DoctorProfile', entityId: 'vrf-demo-1', limit: 50 },
+      MOCK_ACCESS_TOKEN,
+    );
+    expect(after.items).toHaveLength(1);
+  });
+
+  it('404s an unknown doctor and an unknown document', async () => {
+    await expect(
+      verificationService.getVerification('vrf-nope', MOCK_ACCESS_TOKEN),
+    ).rejects.toMatchObject({ status: 404 });
+    await expect(
+      verificationService.requestDocumentUrl('vrf-demo-1', 'doc-nope', MOCK_ACCESS_TOKEN),
+    ).rejects.toMatchObject({ status: 404 });
   });
 });

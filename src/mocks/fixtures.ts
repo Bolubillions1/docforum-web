@@ -5,8 +5,10 @@
 // shapes in src/types/models.ts (which mirror docforum-core's schema) —
 // see ARCHITECTURE_ESSENTIALS.md "Known assumptions" for which of those
 // shapes are still assumed contracts.
+import { defaultPreferencesForRole } from '../features/notifications/preferences';
 import type {
   Appointment,
+  AuditEvent,
   CareThread,
   Closure,
   ConsultationAddendum,
@@ -14,9 +16,11 @@ import type {
   ConsultationNote,
   ConsultationRecord,
   ConsultationReferral,
+  CredentialDocument,
   DataExport,
   Dependent,
   DoctorPracticeInsights,
+  FacilityApiKey,
   FacilityInvite,
   FacilityMember,
   FacilityPerformanceInsights,
@@ -26,12 +30,18 @@ import type {
   HealthEntry,
   IntakeForm,
   DoctorMessageThread,
+  NotificationPreferences,
   PatientOrder,
   PaymentIntent,
   QualifiedOrderFacility,
+  Role,
   RunningDelay,
+  SpecialtyClaim,
   User,
+  VerificationStatus,
   WalletLink,
+  WebhookDelivery,
+  WebhookEndpoint,
 } from '../types/models';
 
 // --- Personas (one per role the dev panel can switch to) --------------------
@@ -97,13 +107,35 @@ export interface MockDb {
   facilityMembers: FacilityMember[];
   facilityInvites: FacilityInvite[];
   fulfillmentQueue: FulfillmentQueueItem[];
+  apiKeys: FacilityApiKey[];
+  webhookEndpoints: WebhookEndpoint[];
+  webhookDeliveries: WebhookDelivery[];
   patientOrders: PatientOrder[];
   orderFacilities: Record<string, QualifiedOrderFacility[]>;
   walletLink: WalletLink | null;
   paymentIntents: PaymentIntent[];
   disputes: FulfillmentDispute[];
   consultationAddenda: ConsultationAddendum[]; // flattened, noteId-keyed lookups below
+  verifications: MockVerification[];
+  specialtyClaims: SpecialtyClaim[];
+  auditEvents: AuditEvent[];
   closures: Closure[];
+  notificationPreferences: Record<Role, NotificationPreferences>;
+}
+
+/** A doctor's verification application (issue #64's assumed queue/detail
+ * shape) — queue rows, detail profile and credential documents in one row. */
+export interface MockVerification {
+  doctorProfileId: string;
+  userId: string;
+  fullName: string;
+  email: string;
+  specialties: string[];
+  submittedAt: string;
+  createdAt: string;
+  updatedAt: string;
+  verificationStatus: VerificationStatus;
+  documents: CredentialDocument[];
 }
 
 export function createSeedDb(): MockDb {
@@ -196,6 +228,7 @@ export function createSeedDb(): MockDb {
           description: 'Demo fixture appointment with Dr. Ficticia Example.',
           status: 'completed',
           timestamp: '2026-10-01T09:00:00.000Z',
+          metadata: { doctorTimeZone: 'Europe/London' },
         },
         {
           id: 'st-demo-2',
@@ -239,6 +272,7 @@ export function createSeedDb(): MockDb {
           description: 'Demo fixture vaccination visit.',
           status: 'completed',
           timestamp: '2026-08-10T11:00:00.000Z',
+          metadata: { doctorTimeZone: 'Europe/London' },
         },
       ],
     },
@@ -860,6 +894,68 @@ export function createSeedDb(): MockDb {
     ],
   };
 
+  const apiKeys: FacilityApiKey[] = [
+    {
+      id: 'key-demo-1',
+      facilityId: FACILITY_ID,
+      name: 'Demo Lab Information System (fake)',
+      prefix: 'df_live_demo1234',
+      scopes: ['orders.read', 'orders.write'],
+      lastUsedAt: '2026-10-18T08:00:00.000Z',
+      revokedAt: null,
+      createdAt: '2026-09-20T09:00:00.000Z',
+    },
+    {
+      id: 'key-demo-2',
+      facilityId: FACILITY_ID,
+      name: 'Demo Inventory Sync (fake)',
+      prefix: 'df_live_demo5678',
+      scopes: [],
+      lastUsedAt: null,
+      revokedAt: null,
+      createdAt: '2026-10-01T09:00:00.000Z',
+    },
+  ];
+
+  const webhookEndpoints: WebhookEndpoint[] = [
+    {
+      id: 'whk-demo-1',
+      facilityId: FACILITY_ID,
+      url: 'https://lab.example.test/webhooks/docforum',
+      events: ['order.created', 'order.assigned', 'order.fulfilled'],
+      secretPrefix: 'whsec_demo',
+      active: true,
+      lastDeliveryAt: '2026-10-18T08:05:00.000Z',
+      createdAt: '2026-09-20T09:00:00.000Z',
+      updatedAt: '2026-10-10T09:00:00.000Z',
+    },
+  ];
+
+  const webhookDeliveries: WebhookDelivery[] = [
+    {
+      id: 'whd-demo-1',
+      endpointId: 'whk-demo-1',
+      event: 'order.created',
+      status: 'success',
+      responseStatusCode: 200,
+      errorMessage: null,
+      attemptCount: 1,
+      deliveredAt: '2026-10-18T08:05:00.000Z',
+      createdAt: '2026-10-18T08:05:00.000Z',
+    },
+    {
+      id: 'whd-demo-2',
+      endpointId: 'whk-demo-1',
+      event: 'order.fulfilled',
+      status: 'failed',
+      responseStatusCode: 500,
+      errorMessage: 'Mock API: simulated 500 from receiver',
+      attemptCount: 3,
+      deliveredAt: null,
+      createdAt: '2026-10-17T12:00:00.000Z',
+    },
+  ];
+
   const walletLink: WalletLink = {
     id: 'wln-demo-1',
     facilityId: FACILITY_ID,
@@ -867,7 +963,6 @@ export function createSeedDb(): MockDb {
     createdAt: '2026-09-20T09:00:00.000Z',
     updatedAt: '2026-09-20T09:00:00.000Z',
   };
-
   const paymentIntents: PaymentIntent[] = [
     {
       // Held in escrow — backs ord-demo-rx-102.
@@ -885,7 +980,8 @@ export function createSeedDb(): MockDb {
       updatedAt: '2026-10-17T10:05:00.000Z',
     },
     {
-      // Never funded — backs ord-demo-lab-101.
+      // Never funded — backs ord-demo-lab-101; also what the pay-with-wallet
+      // panel (issue #59, behind its default-off flag) acts on in dev.
       id: 'pin-demo-2',
       orderType: 'lab_order',
       orderId: 'ord-demo-lab-101',
@@ -1188,6 +1284,124 @@ export function createSeedDb(): MockDb {
     },
   ];
 
+  // Issue #64 — the verification review queue: two waiting applications
+  // (different ages and document counts), one with no documents at all, and
+  // one already decided so the detail page has history to show. All fake
+  // personas on the example.test domain.
+  const verifications: MockVerification[] = [
+    {
+      doctorProfileId: 'vrf-demo-1',
+      userId: 'usr-vrf-demo-1',
+      fullName: 'Dr Ada Example (fake)',
+      email: 'ada.doctor@example.test',
+      specialties: ['Cardiology'],
+      submittedAt: '2026-10-12T09:00:00.000Z',
+      createdAt: '2026-10-12T09:00:00.000Z',
+      updatedAt: '2026-10-12T09:00:00.000Z',
+      verificationStatus: 'pending',
+      documents: [
+        {
+          id: 'doc-demo-1',
+          fileName: 'medical-license-ada.pdf',
+          contentType: 'application/pdf',
+          sizeBytes: 245_760,
+          uploadedAt: '2026-10-12T09:03:00.000Z',
+        },
+        {
+          id: 'doc-demo-2',
+          fileName: 'board-certification-ada.jpg',
+          contentType: 'image/jpeg',
+          sizeBytes: 1_843_200,
+          uploadedAt: '2026-10-12T09:04:00.000Z',
+        },
+      ],
+    },
+    {
+      doctorProfileId: 'vrf-demo-2',
+      userId: 'usr-vrf-demo-2',
+      fullName: 'Dr Bek Example (fake)',
+      email: 'bek.doctor@example.test',
+      specialties: ['Dermatology', 'General practice'],
+      submittedAt: '2026-10-18T14:30:00.000Z',
+      createdAt: '2026-10-18T14:30:00.000Z',
+      updatedAt: '2026-10-18T14:30:00.000Z',
+      verificationStatus: 'pending',
+      documents: [
+        {
+          id: 'doc-demo-3',
+          fileName: 'medical-license-bek.pdf',
+          contentType: 'application/pdf',
+          sizeBytes: 312_320,
+          uploadedAt: '2026-10-18T14:35:00.000Z',
+        },
+      ],
+    },
+    {
+      doctorProfileId: 'vrf-demo-3',
+      userId: 'usr-vrf-demo-3',
+      fullName: 'Dr Cy Example (fake)',
+      email: 'cy.doctor@example.test',
+      specialties: [],
+      submittedAt: '2026-10-19T10:15:00.000Z',
+      createdAt: '2026-10-19T10:15:00.000Z',
+      updatedAt: '2026-10-19T10:15:00.000Z',
+      verificationStatus: 'pending',
+      documents: [],
+    },
+    {
+      doctorProfileId: 'vrf-demo-4',
+      userId: 'usr-vrf-demo-4',
+      fullName: 'Dr Dee Example (fake)',
+      email: 'dee.doctor@example.test',
+      specialties: ['Paediatrics'],
+      submittedAt: '2026-10-01T08:00:00.000Z',
+      createdAt: '2026-10-01T08:00:00.000Z',
+      updatedAt: '2026-10-05T11:00:00.000Z',
+      verificationStatus: 'verified',
+      documents: [
+        {
+          id: 'doc-demo-4',
+          fileName: 'medical-license-dee.pdf',
+          contentType: 'application/pdf',
+          sizeBytes: 198_656,
+          uploadedAt: '2026-10-01T08:02:00.000Z',
+        },
+      ],
+    },
+  ];
+
+  // Issue #64 reads decision history from the real audit trail contract
+  // (#43); these seed the decided doctor's flip plus one unrelated event so
+  // the audit page has something to show too.
+  const auditEvents: AuditEvent[] = [
+    {
+      id: 'aud-demo-1',
+      actorUserId: ADMIN_USER.id,
+      actorRole: 'admin',
+      entityType: 'DoctorProfile',
+      entityId: 'vrf-demo-4',
+      action: 'doctor.verification_status_changed',
+      fromState: 'pending',
+      toState: 'verified',
+      requestId: null,
+      metadata: null,
+      createdAt: '2026-10-05T11:00:00.000Z',
+    },
+    {
+      id: 'aud-demo-2',
+      actorUserId: ADMIN_USER.id,
+      actorRole: 'admin',
+      entityType: 'PaymentIntent',
+      entityId: 'pin-demo-1',
+      action: 'payment_intent.funded',
+      fromState: 'created',
+      toState: 'escrowed',
+      requestId: null,
+      metadata: null,
+      createdAt: '2026-10-17T10:05:00.000Z',
+    },
+  ];
+
   const closures: Closure[] = [
     {
       id: 'clo-holiday-new-year',
@@ -1215,6 +1429,82 @@ export function createSeedDb(): MockDb {
     },
   ];
 
+  // Per-specialty claims (issue #65) — deliberately fake pairs: a GP
+  // claiming cardiology is exactly the PRD §8.1.5 failure this queue exists
+  // to catch. `status: 'pending'` rows are the ones the queue serves.
+  // Ages are relative to seed time so the age filter stays deterministic.
+  const claimedAt = (hours: number) => new Date(Date.now() - hours * 60 * 60 * 1000).toISOString();
+  const CARDIO_CLAIMED_AT = claimedAt(4 * 24); // 4 days — old enough for the 72h filter, not 168h
+  const NEURO_CLAIMED_AT = claimedAt(6); // today
+  const DERM_CLAIMED_AT = claimedAt(10 * 24); // 10 days — survives the 168h filter
+  const specialtyClaims: SpecialtyClaim[] = [
+    {
+      id: 'dsc-demo-1',
+      doctorId: 'prf-doctor-demo',
+      doctor: { id: 'prf-doctor-demo', fullName: 'Dr. Demo Doctor (fake)' },
+      specialtyId: 'spec-cardiology',
+      specialty: { id: 'spec-cardiology', name: 'Cardiology', slug: 'cardiology' },
+      status: 'pending',
+      credential: {
+        id: 'crd-demo-1',
+        fileName: 'cardiology-certificate-demo.pdf',
+        mimeType: 'application/pdf',
+        sizeBytes: 245_760,
+        uploadedAt: CARDIO_CLAIMED_AT,
+      },
+      rejectionReason: null,
+      reviewedById: null,
+      reviewedByName: null,
+      reviewedAt: null,
+      createdAt: CARDIO_CLAIMED_AT,
+      updatedAt: CARDIO_CLAIMED_AT,
+    },
+    {
+      id: 'dsc-demo-2',
+      doctorId: 'prf-doctor-demo',
+      doctor: { id: 'prf-doctor-demo', fullName: 'Dr. Demo Doctor (fake)' },
+      specialtyId: 'spec-neurology',
+      specialty: { id: 'spec-neurology', name: 'Neurology', slug: 'neurology' },
+      status: 'pending',
+      // No credential attached — the UI must flag the judgement call.
+      credential: null,
+      rejectionReason: null,
+      reviewedById: null,
+      reviewedByName: null,
+      reviewedAt: null,
+      createdAt: NEURO_CLAIMED_AT,
+      updatedAt: NEURO_CLAIMED_AT,
+    },
+    {
+      id: 'dsc-demo-3',
+      doctorId: 'prf-doctor-2',
+      doctor: { id: 'prf-doctor-2', fullName: 'Dr. Placeholder Example (fake)' },
+      specialtyId: 'spec-dermatology',
+      specialty: { id: 'spec-dermatology', name: 'Dermatology', slug: 'dermatology' },
+      status: 'pending',
+      credential: {
+        id: 'crd-demo-3',
+        fileName: 'derm-portfolio-demo.jpg',
+        mimeType: 'image/jpeg',
+        sizeBytes: 1_843_200,
+        uploadedAt: DERM_CLAIMED_AT,
+      },
+      rejectionReason: null,
+      reviewedById: null,
+      reviewedByName: null,
+      reviewedAt: null,
+      createdAt: DERM_CLAIMED_AT,
+      updatedAt: DERM_CLAIMED_AT,
+    },
+  ];
+
+  const notificationPreferences: Record<Role, NotificationPreferences> = {
+    patient: defaultPreferencesForRole('patient'),
+    doctor: defaultPreferencesForRole('doctor'),
+    facility: defaultPreferencesForRole('facility'),
+    admin: defaultPreferencesForRole('admin'),
+  };
+
   return {
     dependents,
     healthEntries,
@@ -1234,12 +1524,19 @@ export function createSeedDb(): MockDb {
     facilityMembers,
     facilityInvites,
     fulfillmentQueue,
+    apiKeys,
+    webhookEndpoints,
+    webhookDeliveries,
     patientOrders,
     orderFacilities,
     walletLink,
     paymentIntents,
     disputes,
     consultationAddenda,
+    verifications,
+    specialtyClaims,
+    auditEvents,
     closures,
+    notificationPreferences,
   };
 }
