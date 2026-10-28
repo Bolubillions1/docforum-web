@@ -1,4 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { EmptyState } from '../../../components/states/EmptyState';
+import { InlineError } from '../../../components/states/InlineError';
+import { queryErrorMessage } from '../../../components/states/QueryState';
+import { Skeleton } from '../../../components/states/Skeleton';
 import { Spinner } from '../../../components/Spinner';
 import { ApiError } from '../../../services/api-client';
 import * as messagingService from '../../../services/messaging-service';
@@ -131,6 +135,7 @@ export function MessageThread({
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [loadingOlder, setLoadingOlder] = useState(false);
   const [olderError, setOlderError] = useState<string | null>(null);
+  const threadRef = useRef<HTMLDivElement>(null);
 
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const bottomRef = useRef<HTMLDivElement | null>(null);
